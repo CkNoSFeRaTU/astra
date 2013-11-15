@@ -56,6 +56,7 @@ struct module_data_t
         int set_pnr;
         int sdt;
         int eit;
+        int filter_reverse;
     } config;
 
     /* */
@@ -467,6 +468,9 @@ static void on_pmt(void *arg, mpegts_psi_t *psi)
                     custom_pointer[2] = map_item->custom_pid & 0xFF;
                     break;
                 }
+                else if (mod->config.filter_reverse)
+                    mod->pid_map[pid] = MAX_PID;
+
             }
         }
 
@@ -712,6 +716,7 @@ static void module_init(module_data_t *mod)
 
     module_option_number("pnr", &mod->config.pnr);
     module_option_number("set_pnr", &mod->config.set_pnr);
+    module_option_number("filter_reverse", &mod->config.filter_reverse);
 
     mod->pat = mpegts_psi_init(MPEGTS_PACKET_PAT, 0);
     mod->cat = mpegts_psi_init(MPEGTS_PACKET_CAT, 1);
@@ -755,10 +760,12 @@ static void module_init(module_data_t *mod)
         asc_assert(lua_type(lua, -1) == LUA_TTABLE, "option 'filter' required table");
 
         const int filter = lua_gettop(lua);
+
         for(lua_pushnil(lua); lua_next(lua, filter); lua_pop(lua, 1))
         {
             const int pid = lua_tonumber(lua, -1);
-            mod->pid_map[pid] = MAX_PID;
+            if (!mod->config.filter_reverse)
+                mod->pid_map[pid] = MAX_PID;
         }
     }
     lua_pop(lua, 1); // filter

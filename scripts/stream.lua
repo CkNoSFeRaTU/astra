@@ -644,7 +644,8 @@ function init_input(channel_data, input_id)
     if input_conf.pnr or
        input_conf.set_pnr or
        channel_data.config.map or
-       input_conf.filter
+       input_conf.filter or
+       input_conf.filter_reverse
     then
         local channel_conf =
         {
@@ -660,6 +661,7 @@ function init_input(channel_data, input_id)
         if input_conf.set_pnr then channel_conf.set_pnr = input_conf.set_pnr end
         if channel_data.config.map then channel_conf.map = channel_data.config.map end
         if input_conf.filter then channel_conf.filter = input_conf.filter end
+        if input_conf.filter_reverse then channel_conf.filter_reverse = input_conf.filter_reverse end
 
         input_data.channel = channel(channel_conf)
         input_data.tail = input_data.channel
