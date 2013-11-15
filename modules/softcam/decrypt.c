@@ -33,7 +33,12 @@
 #include <astra.h>
 #include "module_cam.h"
 #include "cas/cas_list.h"
+#ifdef FFDECSA
 #include "FFdecsa/FFdecsa.h"
+#endif
+#ifdef DVBCSA
+#include "libdvbcsa/dvbcsa/dvbcsa.h"
+#endif
 
 struct module_data_t
 {
@@ -45,6 +50,7 @@ struct module_data_t
     const char *name;
     int caid;
     int ecm_pid;
+    int algo;
 
     /* Buffer */
     uint8_t *buffer; // r_buffer + s_buffer
@@ -52,12 +58,23 @@ struct module_data_t
     uint8_t *s_buffer;
     size_t buffer_skip;
 
-    /* FFdecsa */
+    /* Descambling */
     bool is_keys;
-    void *ffdecsa;
     uint8_t **cluster;
     size_t cluster_size;
     size_t cluster_size_bytes;
+#ifdef FFDECSA
+    void *ffdecsa;
+#endif
+#ifdef DVBCSA
+    struct dvbcsa_bs_key_s *libdvbcsa_key_even;
+    struct dvbcsa_bs_key_s *libdvbcsa_key_odd;
+    struct dvbcsa_bs_batch_s *libdvbcsa_tsbbatch_even;
+    struct dvbcsa_bs_batch_s *libdvbcsa_tsbbatch_odd;
+    int libdvbcsa_fill;
+    int libdvbcsa_fill_even;
+    int libdvbcsa_fill_odd;
+#endif
 
     int new_key_id; // 0 - not, 1 - first key, 2 - second key
     uint8_t new_key[16];
@@ -460,6 +477,77 @@ static void on_em(void *arg, mpegts_psi_t *psi)
                                 , psi->buffer, psi->buffer_size);
 }
 
+#ifdef DVBCSA
+void libdvbcsa_decrypt_packets(module_data_t *mod)
+{
+    unsigned char **clst;
+
+    unsigned char *pkt; //uint8_t
+    int xc0;
+    int ev_od;
+    int len;
+    int offset;
+    int n;
+
+    clst=mod->cluster;
+    pkt=*clst;
+    do{ // find a new packet
+        if(pkt==NULL){
+            break;
+        }
+        if(pkt>=*(clst+1)){
+            // out of this range, try next
+            clst++;clst++;
+            pkt=*clst;
+            continue;
+        }
+
+        do { // handle this packet
+            xc0 = pkt[3] & 0xc0;
+            if(xc0 == 0x00 || xc0 == 0x40) // clear or reserved
+                break;
+            if(xc0 == 0x80 || xc0 == 0xc0) { // encrypted
+                ev_od = (xc0 & 0x40) >> 6; // 0 even, 1 odd
+                pkt[3] &= 0x3f;  // consider it decrypted now
+                if(pkt[3] & 0x20) { // incomplete packet
+                    offset = 4 + pkt[4] + 1;
+                    len = 188 - offset;
+                    n = len >> 3;
+                    if(n == 0){ // decrypted==encrypted!
+                        break; // this doesn't need more processing
+                    }
+                } else {
+                    len = 184;
+                    offset = 4;
+                    n = 23;
+                }
+                if(ev_od == 0) {
+                    mod->libdvbcsa_tsbbatch_even[mod->libdvbcsa_fill_even].data = pkt + offset;
+                    mod->libdvbcsa_tsbbatch_even[mod->libdvbcsa_fill_even].len = len;
+                    mod->libdvbcsa_fill_even++;
+                } else {
+                    mod->libdvbcsa_tsbbatch_odd[mod->libdvbcsa_fill_odd].data = pkt + offset;
+                    mod->libdvbcsa_tsbbatch_odd[mod->libdvbcsa_fill_odd].len = len;
+                    mod->libdvbcsa_fill_odd++;
+                }
+            }
+        } while(0);
+    *clst+=188;
+    pkt+=188;
+    } while(1);
+    if(mod->libdvbcsa_fill_even) {
+        mod->libdvbcsa_tsbbatch_even[mod->libdvbcsa_fill_even].data = pkt;
+        dvbcsa_bs_decrypt(mod->libdvbcsa_key_even, mod->libdvbcsa_tsbbatch_even, 184);
+        mod->libdvbcsa_fill_even = 0;
+    }
+    if(mod->libdvbcsa_fill_odd) {
+        mod->libdvbcsa_tsbbatch_odd[mod->libdvbcsa_fill_odd].data = pkt;
+        dvbcsa_bs_decrypt(mod->libdvbcsa_key_odd, mod->libdvbcsa_tsbbatch_odd, 184);
+        mod->libdvbcsa_fill_odd = 0;
+    }
+}
+#endif
+
 /*
  * ooooooooooo  oooooooo8
  * 88  888  88 888
@@ -519,18 +607,52 @@ static void on_ts(module_data_t *mod, const uint8_t *ts)
     mod->cluster[p] = 0;
 
     // decrypt
-    i = 0;
-    while(i < mod->cluster_size)
-        i += decrypt_packets(mod->ffdecsa, mod->cluster);
+#ifdef DVBCSA
+    if (mod->algo)
+    {
+        libdvbcsa_decrypt_packets(mod);
+    }
+    else
+    {
+#endif
+#ifdef FFDECSA
+        i = 0;
+        while(i < mod->cluster_size)
+            i += decrypt_packets(mod->ffdecsa, mod->cluster);
+#endif
+#ifdef DVBCSA
+    }
+#endif
 
     // check new key
     if(mod->new_key_id)
     {
         if(mod->new_key_id == 1)
-            set_even_control_word(mod->ffdecsa, &mod->new_key[0]);
+        {
+#ifdef DVBCSA
+            if (mod->algo)
+                dvbcsa_bs_key_set(&mod->new_key[0], mod->libdvbcsa_key_even);
+#ifdef FFDECSA
+            else
+#endif
+#endif
+#ifdef FFDECSA
+                set_even_control_word(mod->ffdecsa, &mod->new_key[0]);
+#endif
+        }
         else if(mod->new_key_id == 2)
-            set_odd_control_word(mod->ffdecsa, &mod->new_key[8]);
-
+        {
+#ifdef DVBCSA
+            if (mod->algo)
+                dvbcsa_bs_key_set(&mod->new_key[8], mod->libdvbcsa_key_odd);
+#ifdef FFDECSA
+            else
+#endif
+#endif
+#ifdef FFDECSA
+                set_odd_control_word(mod->ffdecsa, &mod->new_key[8]);
+#endif
+        }
         mod->new_key_id = 0;
     }
 
@@ -623,7 +745,19 @@ static void on_response(module_data_t *mod, const uint8_t *data, const char *err
         else
         {
             mod->new_key_id = 0;
-            set_control_words(mod->ffdecsa, &data[3], &data[11]);
+#ifdef DVBCSA
+            if (mod->algo)
+            {
+                dvbcsa_bs_key_set(&data[3], mod->libdvbcsa_key_even);
+                dvbcsa_bs_key_set(&data[11], mod->libdvbcsa_key_odd);
+            }
+#ifdef FFDECSA
+            else
+#endif
+#endif
+#ifdef FFDECSA
+               set_control_words(mod->ffdecsa, &data[3], &data[11]);
+#endif
             memcpy(mod->new_key, &data[3], 16);
             if(mod->is_keys)
                 asc_log_warning(MSG("Both keys changed"));
@@ -667,10 +801,33 @@ static void module_init(module_data_t *mod)
     mod->em = mpegts_psi_init(MPEGTS_PACKET_CA, MAX_PID);
     mod->custom_pmt = mpegts_psi_init(MPEGTS_PACKET_PMT, MAX_PID);
 
-    mod->ffdecsa = get_key_struct();
-    mod->cluster_size = get_suggested_cluster_size();
-    mod->cluster_size_bytes = mod->cluster_size * TS_PACKET_SIZE;
-    mod->cluster = malloc(sizeof(void *) * (mod->cluster_size * 2 + 2));
+    module_option_number("algo", &mod->algo);
+
+#ifdef DVBCSA
+    if (mod->algo)
+    {
+        asc_log_info(MSG("using libdvbcsa implementation"));
+        mod->libdvbcsa_key_even = dvbcsa_bs_key_alloc();
+        mod->libdvbcsa_key_odd = dvbcsa_bs_key_alloc();
+        mod->cluster_size = dvbcsa_bs_batch_size();
+        mod->cluster_size_bytes = mod->cluster_size * TS_PACKET_SIZE;
+        mod->cluster = malloc(sizeof(void *) * (mod->cluster_size * 2 + 2));
+        mod->libdvbcsa_tsbbatch_even = malloc((mod->cluster_size + 1) * sizeof(struct dvbcsa_bs_batch_s));
+        mod->libdvbcsa_tsbbatch_odd  = malloc((mod->cluster_size + 1) * sizeof(struct dvbcsa_bs_batch_s));
+    }
+    else
+    {
+#endif
+#ifdef FFDECSA
+        asc_log_info(MSG("using ffdecsa implementation"));
+        mod->ffdecsa = get_key_struct();
+        mod->cluster_size = get_suggested_cluster_size();
+        mod->cluster_size_bytes = mod->cluster_size * TS_PACKET_SIZE;
+        mod->cluster = malloc(sizeof(void *) * (mod->cluster_size * 2 + 2));
+#endif
+#ifdef DVBCSA
+    }
+#endif
 
     mod->buffer = malloc(mod->cluster_size_bytes * 2);
     mod->r_buffer = mod->buffer; // s_buffer = NULL
@@ -691,7 +848,21 @@ static void module_init(module_data_t *mod)
         mod->is_keys = true;
         mod->caid = 0x2600;
     }
+#ifdef DVBCSA
+    if (mod->algo)
+    {
+        dvbcsa_bs_key_set(first_key, mod->libdvbcsa_key_even);
+        dvbcsa_bs_key_set(first_key, mod->libdvbcsa_key_odd);
+    }
+    else
+    {
+#endif
+#ifdef FFDECSA
     set_control_words(mod->ffdecsa, first_key, first_key);
+#endif
+#ifdef DVBCSA
+    }
+#endif
 
     mod->__decrypt.self = mod;
     mod->__decrypt.on_cam_ready = on_cam_ready;
@@ -735,7 +906,13 @@ static void module_destroy(module_data_t *mod)
         module_decrypt_cas_destroy(mod);
     }
 
+#ifdef DVBCSA
+    dvbcsa_bs_key_free(mod->libdvbcsa_key_even);
+    dvbcsa_bs_key_free(mod->libdvbcsa_key_odd);
+#endif
+#ifdef FFDECSA
     free_key_struct(mod->ffdecsa);
+#endif
     free(mod->cluster);
     free(mod->buffer);
 
