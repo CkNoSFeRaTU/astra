@@ -709,6 +709,12 @@ static void on_response(module_data_t *mod, const uint8_t *data, const char *err
         if(errmsg)
             break;
 
+        if(!mod->__decrypt.cas)
+        {
+            errmsg = "CAS not initialized";
+            break;
+        }
+
         if(!module_cas_check_keys(mod->__decrypt.cas, data))
         {
             errmsg = "Wrong ECM id";
