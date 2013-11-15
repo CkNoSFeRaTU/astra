@@ -1,6 +1,7 @@
 /* FFdecsa -- fast decsa algorithm
  *
  * Copyright (C) 2003-2004  fatih89r
+ *                    2013  NoSFeRaTU
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,6 +18,12 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
+#include <endian.h>
+#ifdef __BYTE_ORDER
+#if __BYTE_ORDER == __BIG_ENDIAN
+#define IS_BIG_ENDIAN 1
+#endif
+#endif
 
 #ifndef FFDECSA_H
 #define FFDECSA_H
