@@ -63,6 +63,8 @@ mpegts_packet_type_t mpegts_pes_type(uint8_t type_id)
         case 0x0F:  // ISO/IEC 13818-7 Audio (ADTS)
         case 0x11:  // ISO/IEC 14496-3 Audio (LATM)
             return MPEGTS_PACKET_AUDIO;
+        case 0x06:
+            return MPEGTS_PACKET_SUB;
         default:
             return MPEGTS_PACKET_DATA;
     }

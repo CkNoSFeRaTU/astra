@@ -37,7 +37,7 @@
 
 typedef struct
 {
-    char type[6];
+    char type[12];
     uint16_t origin_pid;
     uint16_t custom_pid;
     bool is_set;
@@ -404,7 +404,7 @@ static void on_pmt(void *arg, mpegts_psi_t *psi)
 
         if(mod->map)
         {
-            char type[6] = { 0 };
+            char type[12] = { 0 };
             switch(mpegts_pes_type(PMT_ITEM_GET_TYPE(psi, pointer)))
             {
                 case MPEGTS_PACKET_VIDEO:
@@ -414,19 +414,36 @@ static void on_pmt(void *arg, mpegts_psi_t *psi)
                 }
                 case MPEGTS_PACKET_AUDIO:
                 {
+                    strcpy(type, "audio");
                     const uint8_t *desc_pointer = PMT_ITEM_DESC_FIRST(pointer);
                     while(!PMT_ITEM_DESC_EOL(pointer, desc_pointer))
                     {
                         if(desc_pointer[0] == 0x0A)
                         {
-                            memcpy(type, &desc_pointer[2], 3);
-                            type[3] = '\0';
+                            type[5] = '#';
+                            memcpy(&type[6], &desc_pointer[2], 3);
+                            type[9] = '\0';
                             break;
                         }
                         PMT_ITEM_DESC_NEXT(pointer, desc_pointer);
                     }
-                    if(!type[0])
-                        strcpy(type, "audio");
+                    break;
+                }
+                case MPEGTS_PACKET_SUB:
+                {
+                    strcpy(type, "sub");
+                    const uint8_t *desc_pointer = PMT_ITEM_DESC_FIRST(pointer);
+                    while(!PMT_ITEM_DESC_EOL(pointer, desc_pointer))
+                    {
+                        if(desc_pointer[0] == 0x46)
+                        {
+                            type[3] = '#';
+                            memcpy(&type[4], &desc_pointer[2], 3);
+                            type[7] = '\0';
+                            break;
+                        }
+                        PMT_ITEM_DESC_NEXT(pointer, desc_pointer);
+                    }
                     break;
                 }
                 default:
