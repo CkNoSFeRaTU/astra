@@ -125,6 +125,8 @@ typedef struct
     uint16_t buffer_size;
     uint16_t buffer_skip;
     uint8_t buffer[PSI_MAX_SIZE];
+
+    uint8_t reload_counter;
 } mpegts_psi_t;
 
 mpegts_psi_t * mpegts_psi_init(mpegts_packet_type_t type, uint16_t pid);

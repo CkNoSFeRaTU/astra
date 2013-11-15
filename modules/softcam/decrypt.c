@@ -51,6 +51,7 @@ struct module_data_t
     int caid;
     int ecm_pid;
     int algo;
+    int reload_delay;
 
     /* Buffer */
     uint8_t *buffer; // r_buffer + s_buffer
@@ -205,7 +206,10 @@ static void on_cat(void *arg, mpegts_psi_t *psi)
     // check changes
     const uint32_t crc32 = PSI_GET_CRC32(psi);
     if(crc32 == psi->crc32)
+    {
+        psi->reload_counter = 0;
         return;
+    }
 
     // check crc
     if(crc32 != PSI_CALC_CRC32(psi))
@@ -217,8 +221,14 @@ static void on_cat(void *arg, mpegts_psi_t *psi)
     // reload stream
     if(psi->crc32 != 0)
     {
-        asc_log_warning(MSG("CAT changed. Reload stream info"));
-        stream_reload(mod);
+        if (psi->reload_counter >= mod->reload_delay)
+        {
+            asc_log_warning(MSG("CAT changed. Reload stream info"));
+            stream_reload(mod);
+        }
+        else
+            psi->reload_counter++;
+
         return;
     }
 
@@ -802,6 +812,7 @@ static void module_init(module_data_t *mod)
     mod->custom_pmt = mpegts_psi_init(MPEGTS_PACKET_PMT, MAX_PID);
 
     module_option_number("algo", &mod->algo);
+    module_option_number("reload_delay", &mod->reload_delay);
 
 #ifdef DVBCSA
     if (mod->algo)
