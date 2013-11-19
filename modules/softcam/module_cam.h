@@ -23,7 +23,7 @@
 
 #include <astra.h>
 
-#define EM_MAX_SIZE 512
+#define EM_MAX_SIZE 1024
 
 typedef struct module_decrypt_t module_decrypt_t;
 typedef struct module_cam_t module_cam_t;
@@ -167,7 +167,7 @@ struct module_cas_t
     module_decrypt_t *decrypt;
 
     bool (*check_descriptor)(module_data_t *cas_data, const uint8_t *desc);
-    bool (*check_em)(module_data_t *cas_data, mpegts_psi_t *em);
+    bool (*check_em)(module_data_t *cas_data, mpegts_psi_t *em, bool force);
     bool (*check_keys)(module_data_t *cas_data, const uint8_t *keys);
 
     module_data_t *self;
@@ -176,7 +176,7 @@ struct module_cas_t
 #define MODULE_CAS_DATA() module_cas_t __cas
 
 #define module_cas_check_descriptor(_cas, _desc) _cas->check_descriptor(_cas->self, _desc)
-#define module_cas_check_em(_cas, _em) _cas->check_em(_cas->self, _em)
+#define module_cas_check_em(_cas, _em, force) _cas->check_em(_cas->self, _em, force)
 #define module_cas_check_keys(_cas, _keys) _cas->check_keys(_cas->self, _keys)
 
 #define MODULE_CAS(_name)                                                                       \

@@ -50,8 +50,12 @@ struct module_data_t
     const char *name;
     int caid;
     int ecm_pid;
+    int ecm_swap_time;
     int algo;
     int reload_delay;
+
+    int ecm_pid_fails;
+    int64_t ecm_pid_delay;
 
     /* Buffer */
     uint8_t *buffer; // r_buffer + s_buffer
@@ -88,6 +92,8 @@ struct module_data_t
     mpegts_psi_t *em;
 
     mpegts_packet_type_t stream[MAX_PID];
+
+    bool force;
 };
 
 #define MSG(_msg) "[decrypt %s] " _msg, mod->name
@@ -121,6 +127,8 @@ static void stream_reload(module_data_t *mod)
     mod->pat->crc32 = 0;
     mod->cat->crc32 = 0;
     mod->pmt->crc32 = 0;
+    
+    mod->force = false;
 
     module_decrypt_cas_destroy(mod);
 }
@@ -317,6 +325,7 @@ static void on_pmt(void *arg, mpegts_psi_t *psi)
     mod->custom_pmt->pid = psi->pid;
 
     bool is_ecm_selected = false;
+    mod->ecm_pid_fails = 0;
 
     if(mod->ecm_pid) // skip descriptors checking
     {
@@ -351,7 +360,10 @@ static void on_pmt(void *arg, mpegts_psi_t *psi)
                     is_ecm_selected = true;
                 }
                 else
-                    asc_log_warning(MSG("Skip ECM pid:%d"), pid);
+                {
+                    asc_log_info(MSG("Backup ECM pid:%d"), pid);
+                    mod->stream[pid] = MPEGTS_PACKET_CA;
+                }
             }
             else
                 mod->stream[pid] = MPEGTS_PACKET_CA;
@@ -402,7 +414,10 @@ static void on_pmt(void *arg, mpegts_psi_t *psi)
                             is_ecm_selected = true;
                         }
                         else
-                            asc_log_warning(MSG("Skip ECM pid:%d"), pid);
+                        {
+                            asc_log_info(MSG("Backup ECM pid:%d"), pid);
+                            mod->stream[pid] = MPEGTS_PACKET_CA;
+                        }
                     }
                 }
                 else
@@ -465,9 +480,12 @@ static void on_em(void *arg, mpegts_psi_t *psi)
     }
 
     const uint8_t em_type = psi->buffer[0];
+
     if((em_type & ~0x0F) != 0x80)
     {
-        asc_log_error(MSG("wrong packet type 0x%02X"), em_type);
+        if ((em_type & ~0x0F) != 0x90)
+            asc_log_error(MSG("wrong packet type 0x%02X"), em_type);
+
         return;
     }
     else if(em_type >= 0x82)
@@ -477,11 +495,22 @@ static void on_em(void *arg, mpegts_psi_t *psi)
     }
     else
     { /* ECM */
-        ;
+        if (mod->ecm_pid_delay)
+        {
+            if (mod->ecm_pid_delay <= asc_utime())
+            {
+                mod->ecm_pid_delay = 0;
+                mod->ecm_pid_fails = 0;
+            }
+            else
+                return;
+        }
     }
 
-    if(!module_cas_check_em(mod->__decrypt.cas, psi))
+    if(!module_cas_check_em(mod->__decrypt.cas, psi, mod->force))
         return;
+
+    mod->force = false;
 
     mod->__decrypt.cam->send_em(mod->__decrypt.cam->self, &mod->__decrypt
                                 , psi->buffer, psi->buffer_size);
@@ -786,11 +815,68 @@ static void on_response(module_data_t *mod, const uint8_t *data, const char *err
         hex_to_str(key_2, &data[11], 8);
         asc_log_debug(MSG("ECM Found [%02X:%s:%s]") , data[0], key_1, key_2);
 #endif
+        mod->ecm_pid_fails = 0;
+        mod->ecm_pid_delay = 0;
     }
     else
     {
+        if(mod->ecm_swap_time > 0)
+        {
+            uint8_t pid_count = 0;
+            uint8_t pid_pos_old = 0;
+            uint16_t first_pid = 0;
+
+            mod->ecm_pid_fails++;
+            const uint8_t *desc_pointer = PMT_DESC_FIRST(mod->pmt);
+            while(!PMT_DESC_EOL(mod->pmt, desc_pointer))
+            {
+                if(desc_pointer[0] == 0x09)
+                {
+                    const uint16_t pid = DESC_CA_PID(desc_pointer);
+                    if(pid != NULL_TS_PID
+                            && (mod->stream[pid] == MPEGTS_PACKET_CA || mod->stream[pid] == MPEGTS_PACKET_ECM)
+                            && DESC_CA_CAID(desc_pointer) == mod->caid
+                            && module_cas_check_descriptor(mod->__decrypt.cas, desc_pointer))
+                    {
+                        if (pid_count == 0)
+                            first_pid = pid;
+
+                        if (mod->stream[pid] == MPEGTS_PACKET_ECM)
+                        {
+                            pid_pos_old = pid_count;
+                            mod->stream[pid] = MPEGTS_PACKET_CA;
+                            asc_log_info(MSG("Deselect ECM pid:%d"), pid);
+                        }
+
+                        if (pid_pos_old < pid_count)
+                        {
+                            mod->stream[pid] = MPEGTS_PACKET_ECM;
+                            asc_log_info(MSG("Select ECM pid:%d"), pid);
+                        }
+
+                        pid_count++;
+                    }
+                }
+                PMT_DESC_NEXT(mod->pmt, desc_pointer);
+            }
+
+            if (pid_pos_old == pid_count - 1 && first_pid)
+            {
+                mod->stream[first_pid] = MPEGTS_PACKET_ECM;
+                asc_log_info(MSG("Select ECM pid:%d"), first_pid);
+            }
+
+            mod->force = true;
+
+            if (mod->ecm_pid_fails >= pid_count)
+                mod->ecm_pid_delay = asc_utime() + mod->ecm_swap_time * 1000000;
+            else
+                return;
+        }
+
         if(!errmsg)
             errmsg = "Unknown";
+
         asc_log_error(MSG("ECM:0x%02X size:%d Not Found. %s") , data[0], data[2], errmsg);
     }
 }
@@ -810,6 +896,8 @@ static void module_init(module_data_t *mod)
 
     module_option_string("name", &mod->name);
     asc_assert(mod->name != NULL, "[decrypt] option 'name' is required");
+
+    mod->force = false;
 
     mod->pat = mpegts_psi_init(MPEGTS_PACKET_PAT, 0);
     mod->cat = mpegts_psi_init(MPEGTS_PACKET_CAT, 1);
@@ -909,6 +997,7 @@ static void module_init(module_data_t *mod)
     }
 
     module_option_number("ecm_pid", &mod->ecm_pid);
+    module_option_number("ecm_swap_time", &mod->ecm_swap_time);
 
     stream_reload(mod);
 }

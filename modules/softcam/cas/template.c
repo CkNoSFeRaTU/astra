@@ -27,7 +27,7 @@ struct module_data_t
     uint8_t parity;
 };
 
-static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em)
+static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em, bool force)
 {
     const uint8_t em_type = em->buffer[0];
     switch(em_type)

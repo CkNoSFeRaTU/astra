@@ -53,10 +53,10 @@ inline static uint16_t irdeto_ecm_chid(const uint8_t *payload)
     return (payload[6] << 8) | payload[7];
 }
 
-static int irdeto_check_ecm(module_data_t *mod, const uint8_t *payload)
+static int irdeto_check_ecm(module_data_t *mod, const uint8_t *payload, bool force)
 {
     const uint8_t parity = payload[0];
-    if(parity == mod->parity)
+    if(!force && parity == mod->parity)
         return 0;
 
     const uint16_t chid = irdeto_ecm_chid(payload);
@@ -87,7 +87,7 @@ static int irdeto_check_ecm(module_data_t *mod, const uint8_t *payload)
     return 1;
 }
 
-static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em)
+static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em, bool force)
 {
     const uint8_t em_type = em->buffer[0];
     switch(em_type)
@@ -96,7 +96,7 @@ static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em)
         case 0x80:
         case 0x81:
         {
-            if(irdeto_check_ecm(mod, em->buffer))
+            if(irdeto_check_ecm(mod, em->buffer, force))
                 return true;
             break;
         }

@@ -35,7 +35,7 @@ struct module_data_t
 
 /* cas api */
 
-static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em)
+static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em, bool force)
 {
     const uint8_t em_type = em->buffer[0];
     switch(em_type)
@@ -44,7 +44,7 @@ static bool cas_check_em(module_data_t *mod, mpegts_psi_t *em)
         case 0x80:
         case 0x81:
         {
-            if(em_type != mod->parity)
+            if(force || em_type != mod->parity)
             {
                 mod->parity = em_type;
                 return true;
